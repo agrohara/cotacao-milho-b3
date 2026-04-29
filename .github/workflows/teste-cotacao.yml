@@ -24,7 +24,14 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Rodar teste da cotacao
+      - name: Rodar coleta e enviar para SharePoint
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SHAREPOINT_HOSTNAME: ${{ secrets.SHAREPOINT_HOSTNAME }}
+          SHAREPOINT_SITE_PATH: ${{ secrets.SHAREPOINT_SITE_PATH }}
+          SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
         run: python main.py
 
       - name: Salvar Excel atualizado no repositorio
