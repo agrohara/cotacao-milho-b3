@@ -7,63 +7,159 @@ from bs4 import BeautifulSoup
 from openpyxl import Workbook, load_workbook
 
 
-URL = "https://www.noticiasagricolas.com.br/cotacoes/milho/milho-b3-prego-regular"
-CONTRATO_ALVO = "Setembro/2026"
-ARQUIVO_EXCEL = "cotacoes_milho_b3.xlsx"
+URL_MILHO = "https://www.noticiasagricolas.com.br/cotacoes/milho/milho-b3-prego-regular"
+URL_SOJA = "https://www.noticiasagricolas.com.br/cotacoes/soja/soja-bolsa-de-chicago-cme-group"
+URL_DOLAR = "https://www.noticiasagricolas.com.br/cotacao-do-dolar/"
+
+ARQUIVO_EXCEL = "cotacoes_graos.xlsx"
 
 
-def buscar_cotacao():
+def numero_br_para_float(valor):
+    if valor is None:
+        return None
+
+    valor = str(valor).strip()
+    valor = valor.replace("+", "")
+    valor = valor.replace(".", "")
+    valor = valor.replace(",", ".")
+
+    return float(valor)
+
+
+def baixar_texto_pagina(url):
     headers = {
         "User-Agent": "Mozilla/5.0"
     }
 
-    print("Acessando página...")
-    response = requests.get(URL, headers=headers, timeout=30)
-    response.raise_for_status()
+    print(f"Acessando: {url}")
 
-    print("Página acessada com sucesso.")
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
     texto = soup.get_text("\n", strip=True)
 
-    fechamento_match = re.search(r"Fechamento:\s*(\d{2}/\d{2}/\d{4})", texto)
+    return texto
 
-    if not fechamento_match:
+
+def buscar_dolar():
+    texto = baixar_texto_pagina(URL_DOLAR)
+
+    match = re.search(r"R\$\s*([\d,]+)\s+[-+]?[\d,]+%\s+Dólar", texto)
+
+    if not match:
+        print("Não consegui encontrar o dólar. Texto parcial da página:")
+        print(texto[:1500])
+        raise Exception("Dólar não encontrado.")
+
+    dolar = numero_br_para_float(match.group(1))
+
+    print(f"Dólar encontrado: {dolar}")
+
+    return dolar
+
+
+def extrair_bloco_mais_recente(texto):
+    match_data = re.search(r"Fechamento:\s*(\d{2}/\d{2}/\d{4})", texto)
+
+    if not match_data:
         print("Texto parcial da página:")
         print(texto[:2000])
-        raise Exception("Não encontrei a data de fechamento.")
+        raise Exception("Data de fechamento não encontrada.")
 
-    data_fechamento = fechamento_match.group(1)
+    data_cotacao = match_data.group(1)
 
-    padrao = rf"{CONTRATO_ALVO}\s+([\d,]+)\s+(-?[\d,]+)"
-    contrato_match = re.search(padrao, texto)
+    inicio = match_data.end()
 
-    if not contrato_match:
-        print("Texto parcial da página:")
-        print(texto[:3000])
-        raise Exception(f"Não encontrei o contrato {CONTRATO_ALVO}.")
+    proximo_fechamento = re.search(r"Fechamento:\s*\d{2}/\d{2}/\d{4}", texto[inicio:])
 
-    fechamento = contrato_match.group(1)
-    variacao = contrato_match.group(2)
+    if proximo_fechamento:
+        fim = inicio + proximo_fechamento.start()
+        bloco = texto[inicio:fim]
+    else:
+        bloco = texto[inicio:]
 
-    fechamento_num = float(fechamento.replace(",", "."))
-    variacao_num = float(variacao.replace(",", "."))
+    return data_cotacao, bloco
 
-    resultado = {
-        "data_coleta": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "data_fechamento": data_fechamento,
-        "contrato": CONTRATO_ALVO,
-        "fechamento_rs_sc_60kg": fechamento_num,
-        "variacao_percentual": variacao_num,
-        "fonte": "Notícias Agrícolas / B3",
-        "url": URL,
-        "chave": f"{CONTRATO_ALVO}_{data_fechamento}",
-    }
 
-    print("Cotação encontrada:")
-    print(resultado)
+def buscar_cotacoes_milho(dolar):
+    texto = baixar_texto_pagina(URL_MILHO)
 
-    return resultado
+    data_cotacao, bloco = extrair_bloco_mais_recente(texto)
+
+    linhas = []
+
+    padrao = re.compile(
+        r"([A-Za-zçÇãÃéÉíÍóÓúÚ]+/\d{4})\s+([\d,]+)\s+([-+]?[\d,]+)"
+    )
+
+    for match in padrao.finditer(bloco):
+        contrato_mes = match.group(1)
+        fechamento = numero_br_para_float(match.group(2))
+
+        linha = {
+            "data_coleta": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_cotacao": data_cotacao,
+            "grao": "MILHO",
+            "contrato_mes": contrato_mes,
+            "fechamento_rs_sc_60kg": fechamento,
+            "fechamento_usd_bushel": None,
+            "dolar": dolar,
+            "fonte": "Notícias Agrícolas / B3",
+            "url": URL_MILHO,
+            "chave": f"MILHO_{contrato_mes}_{data_cotacao}",
+        }
+
+        linhas.append(linha)
+
+    if not linhas:
+        print("Bloco de milho:")
+        print(bloco[:2000])
+        raise Exception("Nenhuma cotação de milho encontrada.")
+
+    print(f"Cotações de milho encontradas: {len(linhas)}")
+
+    return linhas
+
+
+def buscar_cotacoes_soja(dolar):
+    texto = baixar_texto_pagina(URL_SOJA)
+
+    data_cotacao, bloco = extrair_bloco_mais_recente(texto)
+
+    linhas = []
+
+    padrao = re.compile(
+        r"([A-Za-zçÇãÃéÉíÍóÓúÚ]+/\d{2})\s+([\d,]+)\s+([-+]?[\d,]+)\s+([-+]?[\d,]+)"
+    )
+
+    for match in padrao.finditer(bloco):
+        contrato_mes = match.group(1)
+        fechamento_usd_bushel = numero_br_para_float(match.group(2))
+
+        linha = {
+            "data_coleta": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_cotacao": data_cotacao,
+            "grao": "SOJA",
+            "contrato_mes": contrato_mes,
+            "fechamento_rs_sc_60kg": None,
+            "fechamento_usd_bushel": fechamento_usd_bushel,
+            "dolar": dolar,
+            "fonte": "Notícias Agrícolas / CME Group",
+            "url": URL_SOJA,
+            "chave": f"SOJA_{contrato_mes}_{data_cotacao}",
+        }
+
+        linhas.append(linha)
+
+    if not linhas:
+        print("Bloco de soja:")
+        print(bloco[:2000])
+        raise Exception("Nenhuma cotação de soja encontrada.")
+
+    print(f"Cotações de soja encontradas: {len(linhas)}")
+
+    return linhas
 
 
 def criar_ou_abrir_excel():
@@ -79,10 +175,12 @@ def criar_ou_abrir_excel():
 
         cabecalhos = [
             "data_coleta",
-            "data_fechamento",
-            "contrato",
+            "data_cotacao",
+            "grao",
+            "contrato_mes",
             "fechamento_rs_sc_60kg",
-            "variacao_percentual",
+            "fechamento_usd_bushel",
+            "dolar",
             "fonte",
             "url",
             "chave",
@@ -93,45 +191,66 @@ def criar_ou_abrir_excel():
     return workbook, sheet
 
 
-def chave_ja_existe(sheet, chave):
-    # A coluna H é a coluna "chave"
+def carregar_chaves_existentes(sheet):
+    chaves = set()
+
     for row in sheet.iter_rows(min_row=2, values_only=True):
-        chave_existente = row[7]
+        chave = row[9]
 
-        if chave_existente == chave:
-            return True
+        if chave:
+            chaves.add(chave)
 
-    return False
+    return chaves
 
 
-def salvar_no_excel(cotacao):
+def salvar_no_excel(linhas):
     workbook, sheet = criar_ou_abrir_excel()
+    chaves_existentes = carregar_chaves_existentes(sheet)
 
-    if chave_ja_existe(sheet, cotacao["chave"]):
-        print(f"A cotação {cotacao['chave']} já existe no Excel. Não vou duplicar.")
-        return
+    novas_linhas = 0
+    duplicadas = 0
 
-    nova_linha = [
-        cotacao["data_coleta"],
-        cotacao["data_fechamento"],
-        cotacao["contrato"],
-        cotacao["fechamento_rs_sc_60kg"],
-        cotacao["variacao_percentual"],
-        cotacao["fonte"],
-        cotacao["url"],
-        cotacao["chave"],
-    ]
+    for cotacao in linhas:
+        if cotacao["chave"] in chaves_existentes:
+            print(f"Já existe, não vou duplicar: {cotacao['chave']}")
+            duplicadas += 1
+            continue
 
-    sheet.append(nova_linha)
+        nova_linha = [
+            cotacao["data_coleta"],
+            cotacao["data_cotacao"],
+            cotacao["grao"],
+            cotacao["contrato_mes"],
+            cotacao["fechamento_rs_sc_60kg"],
+            cotacao["fechamento_usd_bushel"],
+            cotacao["dolar"],
+            cotacao["fonte"],
+            cotacao["url"],
+            cotacao["chave"],
+        ]
+
+        sheet.append(nova_linha)
+        chaves_existentes.add(cotacao["chave"])
+        novas_linhas += 1
 
     workbook.save(ARQUIVO_EXCEL)
 
-    print(f"Cotação adicionada no arquivo {ARQUIVO_EXCEL}.")
+    print(f"Arquivo salvo: {ARQUIVO_EXCEL}")
+    print(f"Novas linhas adicionadas: {novas_linhas}")
+    print(f"Linhas duplicadas ignoradas: {duplicadas}")
 
 
 def main():
-    cotacao = buscar_cotacao()
-    salvar_no_excel(cotacao)
+    dolar = buscar_dolar()
+
+    linhas_milho = buscar_cotacoes_milho(dolar)
+    linhas_soja = buscar_cotacoes_soja(dolar)
+
+    todas_linhas = linhas_milho + linhas_soja
+
+    print(f"Total de linhas capturadas: {len(todas_linhas)}")
+
+    salvar_no_excel(todas_linhas)
 
 
 if __name__ == "__main__":
