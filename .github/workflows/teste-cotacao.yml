@@ -2,6 +2,8 @@ name: Teste Cotacao Milho B3
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 15 * * *"
 
 jobs:
   testar-cotacao:
