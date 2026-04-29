@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "0 15 * * *"
 
+permissions:
+  contents: write
+
 jobs:
   testar-cotacao:
     runs-on: ubuntu-latest
@@ -23,3 +26,11 @@ jobs:
 
       - name: Rodar teste da cotacao
         run: python main.py
+
+      - name: Salvar Excel atualizado no repositorio
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add cotacoes_milho_b3.xlsx
+          git commit -m "Atualiza cotacao milho B3" || echo "Sem alteracoes para salvar"
+          git push
