@@ -31,6 +31,6 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add cotacoes_milho_b3.xlsx
-          git commit -m "Atualiza cotacao milho B3" || echo "Sem alteracoes para salvar"
+          git add cotacoes_graos.xlsx
+          git commit -m "Atualiza cotacoes graos" || echo "Sem alteracoes para salvar"
           git push
