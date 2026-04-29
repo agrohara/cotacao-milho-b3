@@ -1,6 +1,7 @@
 import os
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -240,6 +241,79 @@ def salvar_no_excel(linhas):
     print(f"Linhas duplicadas ignoradas: {duplicadas}")
 
 
+def obter_token_graph():
+    tenant_id = os.environ["TENANT_ID"]
+    client_id = os.environ["CLIENT_ID"]
+    client_secret = os.environ["CLIENT_SECRET"]
+
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+
+    payload = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": "https://graph.microsoft.com/.default",
+        "grant_type": "client_credentials",
+    }
+
+    response = requests.post(url, data=payload, timeout=30)
+    response.raise_for_status()
+
+    return response.json()["access_token"]
+
+
+def obter_site_id(token):
+    hostname = os.environ["SHAREPOINT_HOSTNAME"]
+    site_path = os.environ["SHAREPOINT_SITE_PATH"]
+
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    if site_path == "/":
+        url = f"https://graph.microsoft.com/v1.0/sites/{hostname}"
+    else:
+        url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:{site_path}"
+
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+
+    site_id = response.json()["id"]
+
+    print(f"Site ID encontrado: {site_id}")
+
+    return site_id
+
+
+def enviar_excel_para_sharepoint():
+    print("Enviando Excel para o SharePoint...")
+
+    token = obter_token_graph()
+    site_id = obter_site_id(token)
+
+    folder_path = os.environ["SHAREPOINT_FOLDER_PATH"].strip("/")
+    arquivo_destino = ARQUIVO_EXCEL
+
+    encoded_path = quote(f"{folder_path}/{arquivo_destino}")
+
+    url_upload = (
+        f"https://graph.microsoft.com/v1.0/sites/{site_id}"
+        f"/drive/root:/{encoded_path}:/content"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+
+    with open(ARQUIVO_EXCEL, "rb") as arquivo:
+        response = requests.put(url_upload, headers=headers, data=arquivo, timeout=60)
+
+    response.raise_for_status()
+
+    print("Arquivo enviado para o SharePoint com sucesso.")
+    print(f"Destino: {folder_path}/{arquivo_destino}")
+
+
 def main():
     dolar = buscar_dolar()
 
@@ -251,6 +325,8 @@ def main():
     print(f"Total de linhas capturadas: {len(todas_linhas)}")
 
     salvar_no_excel(todas_linhas)
+
+    enviar_excel_para_sharepoint()
 
 
 if __name__ == "__main__":
