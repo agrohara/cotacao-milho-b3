@@ -46,7 +46,8 @@ def baixar_texto_pagina(url):
 def buscar_dolar():
     texto = baixar_texto_pagina(URL_DOLAR)
 
-    match = re.search(r"R\$\s*([\d,]+)\s+[-+]?[\d,]+%\s+Dólar", texto)
+    # Procura dólar no formato R$ 5,00 / R$ 5,67 / R$ 5.67
+    match = re.search(r"R\$\s*(\d+[,.]\d{2,4})", texto)
 
     if not match:
         print("Não consegui encontrar o dólar. Texto parcial da página:")
@@ -55,7 +56,10 @@ def buscar_dolar():
 
     dolar = numero_br_para_float(match.group(1))
 
-    print(f"Dólar encontrado: {dolar}")
+    # Garante duas casas decimais no número
+    dolar = round(dolar, 2)
+
+    print(f"Dólar encontrado: {dolar:.2f}")
 
     return dolar
 
@@ -204,6 +208,32 @@ def carregar_chaves_existentes(sheet):
     return chaves
 
 
+def formatar_colunas_excel(sheet):
+    # Coluna A: data_coleta
+    for cell in sheet["A"]:
+        if cell.row == 1:
+            continue
+        cell.number_format = "yyyy-mm-dd hh:mm:ss"
+
+    # Coluna E: fechamento_rs_sc_60kg
+    for cell in sheet["E"]:
+        if cell.row == 1:
+            continue
+        cell.number_format = "0.00"
+
+    # Coluna F: fechamento_usd_bushel
+    for cell in sheet["F"]:
+        if cell.row == 1:
+            continue
+        cell.number_format = "0.0000"
+
+    # Coluna G: dolar
+    for cell in sheet["G"]:
+        if cell.row == 1:
+            continue
+        cell.number_format = "0.00"
+
+
 def salvar_no_excel(linhas):
     workbook, sheet = criar_ou_abrir_excel()
     chaves_existentes = carregar_chaves_existentes(sheet)
@@ -233,6 +263,8 @@ def salvar_no_excel(linhas):
         sheet.append(nova_linha)
         chaves_existentes.add(cotacao["chave"])
         novas_linhas += 1
+
+    formatar_colunas_excel(sheet)
 
     workbook.save(ARQUIVO_EXCEL)
 
