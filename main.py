@@ -6,6 +6,7 @@ from urllib.parse import quote
 import requests
 from bs4 import BeautifulSoup
 from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
 URL_MILHO = "https://www.noticiasagricolas.com.br/cotacoes/milho/milho-b3-prego-regular"
@@ -13,6 +14,7 @@ URL_SOJA = "https://www.noticiasagricolas.com.br/cotacoes/soja/soja-bolsa-de-chi
 URL_DOLAR = "https://www.noticiasagricolas.com.br/cotacao-do-dolar/"
 
 ARQUIVO_EXCEL = "cotacoes_graos.xlsx"
+NOME_TABELA_EXCEL = "tb_cotacoes_graos"
 
 
 def numero_br_para_float(valor):
@@ -46,7 +48,6 @@ def baixar_texto_pagina(url):
 def buscar_dolar():
     texto = baixar_texto_pagina(URL_DOLAR)
 
-    # Procura dólar no formato R$ 5,00 / R$ 5,67 / R$ 5.67
     match = re.search(r"R\$\s*(\d+[,.]\d{2,4})", texto)
 
     if not match:
@@ -55,8 +56,6 @@ def buscar_dolar():
         raise Exception("Dólar não encontrado.")
 
     dolar = numero_br_para_float(match.group(1))
-
-    # Garante duas casas decimais no número
     dolar = round(dolar, 2)
 
     print(f"Dólar encontrado: {dolar:.2f}")
@@ -209,29 +208,78 @@ def carregar_chaves_existentes(sheet):
 
 
 def formatar_colunas_excel(sheet):
-    # Coluna A: data_coleta
     for cell in sheet["A"]:
         if cell.row == 1:
             continue
         cell.number_format = "yyyy-mm-dd hh:mm:ss"
 
-    # Coluna E: fechamento_rs_sc_60kg
     for cell in sheet["E"]:
         if cell.row == 1:
             continue
         cell.number_format = "0.00"
 
-    # Coluna F: fechamento_usd_bushel
     for cell in sheet["F"]:
         if cell.row == 1:
             continue
         cell.number_format = "0.0000"
 
-    # Coluna G: dolar
     for cell in sheet["G"]:
         if cell.row == 1:
             continue
         cell.number_format = "0.00"
+
+    larguras = {
+        "A": 22,
+        "B": 15,
+        "C": 12,
+        "D": 18,
+        "E": 24,
+        "F": 24,
+        "G": 12,
+        "H": 32,
+        "I": 80,
+        "J": 35,
+    }
+
+    for coluna, largura in larguras.items():
+        sheet.column_dimensions[coluna].width = largura
+
+
+def criar_ou_atualizar_tabela_excel(sheet):
+    ultima_linha = sheet.max_row
+    ultima_coluna = sheet.max_column
+
+    if ultima_linha < 2:
+        print("Não há linhas suficientes para criar tabela.")
+        return
+
+    intervalo_tabela = f"A1:J{ultima_linha}"
+
+    if NOME_TABELA_EXCEL in sheet.tables:
+        print(f"Tabela {NOME_TABELA_EXCEL} já existe. Atualizando intervalo...")
+        sheet.tables[NOME_TABELA_EXCEL].ref = intervalo_tabela
+    else:
+        print(f"Criando tabela {NOME_TABELA_EXCEL} no intervalo {intervalo_tabela}...")
+
+        tabela = Table(
+            displayName=NOME_TABELA_EXCEL,
+            ref=intervalo_tabela
+        )
+
+        estilo = TableStyleInfo(
+            name="TableStyleMedium2",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+
+        tabela.tableStyleInfo = estilo
+
+        sheet.add_table(tabela)
+
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = intervalo_tabela
 
 
 def salvar_no_excel(linhas):
@@ -265,6 +313,7 @@ def salvar_no_excel(linhas):
         novas_linhas += 1
 
     formatar_colunas_excel(sheet)
+    criar_ou_atualizar_tabela_excel(sheet)
 
     workbook.save(ARQUIVO_EXCEL)
 
