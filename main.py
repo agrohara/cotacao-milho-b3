@@ -18,6 +18,7 @@ URL_MILHO = "https://www.noticiasagricolas.com.br/cotacoes/milho/milho-b3-prego-
 URL_SOJA = "https://www.noticiasagricolas.com.br/cotacoes/soja/soja-bolsa-de-chicago-cme-group"
 URL_DOLAR = "https://www.noticiasagricolas.com.br/cotacao-do-dolar/"
 
+
 # ============================================================
 # FONTES - SIMA / CELEPAR
 # ============================================================
@@ -37,6 +38,7 @@ PRODUTOS_SIMA = [
         "produto": "Soja industrial tipo 1 sc 60 Kg",
     },
 ]
+
 
 # ============================================================
 # EXCEL
@@ -81,6 +83,17 @@ CABECALHOS_SIMA = [
 # ============================================================
 
 def numero_br_para_float(valor):
+    """
+    Converte textos numéricos para float.
+
+    Casos tratados:
+    71,94     -> 71.94
+    53.00     -> 53.00
+    109.00    -> 109.00
+    1.234,56  -> 1234.56
+    1,234.56  -> 1234.56
+    """
+
     if valor is None:
         return None
 
@@ -95,9 +108,35 @@ def numero_br_para_float(valor):
     if any(palavra in valor.upper() for palavra in ["PREÇO", "PRECO", "COMUM", "M_C", "MIN", "MAX"]):
         return None
 
-    valor = valor.replace("+", "")
-    valor = valor.replace(".", "")
-    valor = valor.replace(",", ".")
+    valor = valor.replace("+", "").strip()
+
+    # Se tem vírgula e ponto, decide o formato pelo último separador
+    if "," in valor and "." in valor:
+        if valor.rfind(",") > valor.rfind("."):
+            # Formato brasileiro: 1.234,56
+            valor = valor.replace(".", "")
+            valor = valor.replace(",", ".")
+        else:
+            # Formato americano: 1,234.56
+            valor = valor.replace(",", "")
+
+    # Se tem apenas vírgula, é decimal brasileiro
+    elif "," in valor:
+        valor = valor.replace(".", "")
+        valor = valor.replace(",", ".")
+
+    # Se tem apenas ponto, mantém como decimal
+    elif "." in valor:
+        partes = valor.split(".")
+
+        # Se tiver mais de um ponto, assume separador de milhar
+        if len(partes) > 2:
+            ultima_parte = partes[-1]
+            valor = "".join(partes[:-1]) + "." + ultima_parte
+
+        # Se tiver só um ponto, mantém: 53.00 -> 53.00
+        else:
+            valor = valor
 
     try:
         return float(valor)
@@ -133,7 +172,6 @@ def data_hora_coleta():
 def buscar_dolar():
     texto = baixar_texto_pagina(URL_DOLAR)
 
-    # Procura dólar no formato R$ 5,00 / R$ 5,67 / R$ 5.67
     match = re.search(r"R\$\s*(\d+[,.]\d{2,4})", texto)
 
     if not match:
@@ -345,11 +383,9 @@ def extrair_linhas_sima_m_c(html, grao, produto_nome):
 
             texto_linha = " ".join(valores).upper()
 
-            # Ignora cabeçalho
             if "NÚCLEO REGIONAL" in texto_linha or "NUCLEO REGIONAL" in texto_linha:
                 continue
 
-            # Ignora legenda/rodapé
             if "PREÇO" in texto_linha or "PRECO" in texto_linha:
                 continue
 
@@ -415,7 +451,6 @@ def criar_ou_abrir_workbook():
         print("Arquivo Excel não existe. Criando...")
         workbook = Workbook()
 
-        # Remove aba padrão se estiver vazia
         aba_padrao = workbook.active
         workbook.remove(aba_padrao)
 
@@ -429,11 +464,9 @@ def obter_ou_criar_aba(workbook, nome_aba, cabecalhos):
         print(f"Criando aba: {nome_aba}")
         sheet = workbook.create_sheet(nome_aba)
 
-    # Se a aba estiver vazia, cria cabeçalho
     if sheet.max_row == 1 and sheet.max_column == 1 and sheet["A1"].value is None:
         sheet.append(cabecalhos)
 
-    # Se a primeira linha não tiver os cabeçalhos esperados, garante o cabeçalho
     primeira_linha = [sheet.cell(row=1, column=i + 1).value for i in range(len(cabecalhos))]
 
     if primeira_linha != cabecalhos:
