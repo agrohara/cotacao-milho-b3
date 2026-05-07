@@ -29,10 +29,21 @@ def numero_br_para_float(valor):
     if valor.upper() in ["SINF", "AUS", "-", ""]:
         return None
 
+    # Só tenta converter se tiver aparência de número
+    # Exemplos aceitos: 52,00 / 52.00 / 109 / 109,50
+    if not re.search(r"\d", valor):
+        return None
+
+    if any(palavra in valor.upper() for palavra in ["PREÇO", "PRECO", "COMUM", "M_C", "MIN", "MAX"]):
+        return None
+
     valor = valor.replace(".", "")
     valor = valor.replace(",", ".")
 
-    return float(valor)
+    try:
+        return float(valor)
+    except ValueError:
+        return None
 
 
 def baixar_resultado_produto(codigo_produto):
@@ -42,7 +53,6 @@ def baixar_resultado_produto(codigo_produto):
         "User-Agent": "Mozilla/5.0"
     }
 
-    # Primeiro acessa a página inicial para criar sessão/cookies
     response_inicial = session.get(
         URL_INICIAL,
         headers=headers_get,
@@ -63,7 +73,6 @@ def baixar_resultado_produto(codigo_produto):
         "submit1": "Pesquisar",
     }
 
-    # Agora envia para a página correta do formulário
     response = session.post(
         URL_RESULTADO,
         data=dados,
@@ -78,8 +87,6 @@ def baixar_resultado_produto(codigo_produto):
 
 
 def extrair_data_cotacao(texto):
-    # Exemplo no site:
-    # Soja industrial tipo 1 sc 60 Kg , em 07/05/2026
     match = re.search(r"em\s+(\d{2}/\d{2}/\d{4})", texto)
 
     if match:
@@ -121,24 +128,36 @@ def extrair_linhas_m_c(html, grao, produto_nome):
             m_c = valores[2].strip()
             maximo = valores[3].strip()
 
-            if nucleo_regional.upper() in ["NÚCLEO REGIONAL", "NUCLEO REGIONAL"]:
+            texto_linha = " ".join(valores).upper()
+
+            # Ignora cabeçalho
+            if "NÚCLEO REGIONAL" in texto_linha or "NUCLEO REGIONAL" in texto_linha:
                 continue
 
-            if nucleo_regional.upper() in ["MIN", "M_C", "MAX"]:
+            # Ignora legenda/rodapé
+            if "PREÇO" in texto_linha or "PRECO" in texto_linha:
                 continue
 
-            # Evita linhas de rodapé/legenda
-            if "fonte" in nucleo_regional.lower():
+            if "FONTE" in texto_linha:
+                continue
+
+            if "M_C" in texto_linha and "PREÇO" in texto_linha:
                 continue
 
             m_c_numero = numero_br_para_float(m_c)
+
+            # Se M_c não virou número, ignora a linha
+            if m_c_numero is None:
+                continue
 
             linha_saida = {
                 "data_cotacao": data_cotacao,
                 "grao": grao,
                 "produto": produto_nome,
                 "nucleo_regional": nucleo_regional,
+                "minimo": numero_br_para_float(minimo),
                 "m_c": m_c_numero,
+                "maximo": numero_br_para_float(maximo),
                 "m_c_original": m_c,
             }
 
