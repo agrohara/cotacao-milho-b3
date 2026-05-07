@@ -1,153 +1,150 @@
-import re
 import requests
 from bs4 import BeautifulSoup
 
 
 URL_SIMA = "https://celepar7.pr.gov.br/sima/cotdiap.asp"
 
-PRODUTOS = [
-    {
-        "codigo": "7",
-        "grao": "MILHO",
-        "produto": "Milho amarelo tipo 1 sc 60 Kg",
-    },
-    {
-        "codigo": "8",
-        "grao": "SOJA",
-        "produto": "Soja industrial tipo 1 sc 60 Kg",
-    },
-]
 
-
-def numero_br_para_float(valor):
-    if valor is None:
-        return None
-
-    valor = str(valor).strip()
-
-    if valor.upper() in ["SINF", "AUS", "-", ""]:
-        return None
-
-    valor = valor.replace(".", "")
-    valor = valor.replace(",", ".")
-
-    return float(valor)
-
-
-def baixar_pagina_produto(codigo_produto):
+def baixar_pagina_inicial():
     headers = {
         "User-Agent": "Mozilla/5.0"
     }
 
-    params = {
-        "produto": codigo_produto
-    }
-
-    response = requests.get(
-        URL_SIMA,
-        params=params,
-        headers=headers,
-        timeout=30
-    )
-
+    response = requests.get(URL_SIMA, headers=headers, timeout=30)
     response.encoding = response.apparent_encoding
     response.raise_for_status()
 
     return response.text
 
 
-def extrair_data_cotacao(texto):
-    match = re.search(r"em\s+(\d{2}/\d{2}/\d{4})", texto)
+def analisar_formularios():
+    html = baixar_pagina_inicial()
 
-    if match:
-        return match.group(1)
-
-    return None
-
-
-def extrair_tabela_m_c(html, grao, produto_nome):
     soup = BeautifulSoup(html, "html.parser")
-    texto = soup.get_text("\n", strip=True)
 
-    data_cotacao = extrair_data_cotacao(texto)
+    forms = soup.find_all("form")
 
-    tabelas = soup.find_all("table")
+    print(f"Quantidade de FORM encontrados: {len(forms)}")
+    print("=" * 80)
 
-    if not tabelas:
-        print(f"Nenhuma tabela encontrada para {produto_nome}.")
-        print(texto[:2000])
-        return []
+    if not forms:
+        print("Nenhum FORM encontrado.")
+        print("Trecho inicial do HTML:")
+        print(html[:4000])
+        return
 
-    linhas_extraidas = []
+    for i, form in enumerate(forms, start=1):
+        print(f"FORM {i}")
+        print(f"method: {form.get('method')}")
+        print(f"action: {form.get('action')}")
+        print("-" * 80)
 
-    for tabela in tabelas:
-        linhas = tabela.find_all("tr")
+        inputs = form.find_all(["input", "select", "textarea"])
 
-        for linha in linhas:
-            colunas = linha.find_all(["td", "th"])
-            valores = [col.get_text(strip=True) for col in colunas]
+        for campo in inputs:
+            tag = campo.name
+            nome = campo.get("name")
+            tipo = campo.get("type")
+            valor = campo.get("value")
 
-            if len(valores) < 4:
-                continue
+            print(f"tag: {tag} | name: {nome} | type: {tipo} | value: {valor}")
 
-            primeira_coluna = valores[0].strip()
+            if tag == "select":
+                options = campo.find_all("option")
 
-            if primeira_coluna.upper() in ["NÚCLEO REGIONAL", "NUCLEO REGIONAL"]:
-                continue
+                print("Opções do SELECT:")
 
-            min_valor = valores[1].strip()
-            m_c_valor = valores[2].strip()
-            max_valor = valores[3].strip()
+                for option in options:
+                    texto = option.get_text(strip=True)
+                    valor_option = option.get("value")
 
-            # Evita pegar linhas de legenda/rodapé
-            if primeira_coluna.upper() in ["MIN", "M_C", "MAX"]:
-                continue
+                    if "soja" in texto.lower() or "milho" in texto.lower():
+                        print(f"  Produto: {texto} | value: {valor_option}")
 
-            m_c_numero = numero_br_para_float(m_c_valor)
+        print("=" * 80)
 
-            linha_saida = {
-                "data_cotacao": data_cotacao,
-                "grao": grao,
-                "produto": produto_nome,
-                "nucleo_regional": primeira_coluna,
-                "m_c": m_c_numero,
-                "m_c_original": m_c_valor,
-            }
 
-            linhas_extraidas.append(linha_saida)
+def testar_envios():
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
 
-    return linhas_extraidas
+    testes = [
+        {
+            "descricao": "GET com produto=7",
+            "metodo": "GET",
+            "dados": {"produto": "7"},
+        },
+        {
+            "descricao": "GET com produto=8",
+            "metodo": "GET",
+            "dados": {"produto": "8"},
+        },
+        {
+            "descricao": "POST com produto=7",
+            "metodo": "POST",
+            "dados": {"produto": "7"},
+        },
+        {
+            "descricao": "POST com produto=8",
+            "metodo": "POST",
+            "dados": {"produto": "8"},
+        },
+    ]
+
+    print("\n")
+    print("#" * 80)
+    print("TESTANDO FORMAS DE ENVIO")
+    print("#" * 80)
+
+    for teste in testes:
+        descricao = teste["descricao"]
+        metodo = teste["metodo"]
+        dados = teste["dados"]
+
+        print("\n")
+        print(f"Teste: {descricao}")
+
+        if metodo == "GET":
+            response = requests.get(
+                URL_SIMA,
+                params=dados,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=30,
+            )
+        else:
+            response = requests.post(
+                URL_SIMA,
+                data=dados,
+                headers=headers,
+                timeout=30,
+            )
+
+        response.encoding = response.apparent_encoding
+        response.raise_for_status()
+
+        texto = BeautifulSoup(response.text, "html.parser").get_text("\n", strip=True)
+
+        encontrou_tabela = "NÚCLEO REGIONAL" in texto or "NUCLEO REGIONAL" in texto
+        encontrou_soja = "Soja industrial tipo 1 sc 60 Kg" in texto
+        encontrou_milho = "Milho amarelo tipo 1 sc 60 Kg" in texto
+        encontrou_media = "Média do Dia" in texto or "Media do Dia" in texto
+
+        print(f"Encontrou tabela NÚCLEO REGIONAL? {encontrou_tabela}")
+        print(f"Encontrou Média do Dia? {encontrou_media}")
+        print(f"Encontrou texto soja? {encontrou_soja}")
+        print(f"Encontrou texto milho? {encontrou_milho}")
+
+        print("Trecho do texto retornado:")
+        print("-" * 80)
+        print(texto[:2500])
+        print("-" * 80)
 
 
 def main():
-    todas_linhas = []
-
-    for produto in PRODUTOS:
-        print("=" * 80)
-        print(f"Coletando: {produto['produto']} | Código: {produto['codigo']}")
-
-        html = baixar_pagina_produto(produto["codigo"])
-
-        linhas = extrair_tabela_m_c(
-            html=html,
-            grao=produto["grao"],
-            produto_nome=produto["produto"],
-        )
-
-        print(f"Linhas encontradas: {len(linhas)}")
-
-        for linha in linhas:
-            print(
-                f"{linha['data_cotacao']} | "
-                f"{linha['grao']} | "
-                f"{linha['nucleo_regional']} | "
-                f"M_c: {linha['m_c_original']}"
-            )
-
-        todas_linhas.extend(linhas)
-
-    print("=" * 80)
-    print(f"TOTAL GERAL DE LINHAS: {len(todas_linhas)}")
+    analisar_formularios()
+    testar_envios()
 
 
 if __name__ == "__main__":
