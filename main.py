@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from datetime import datetime
 from urllib.parse import quote
 
@@ -17,6 +18,15 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 URL_MILHO = "https://www.noticiasagricolas.com.br/cotacoes/milho/milho-b3-prego-regular"
 URL_SOJA = "https://www.noticiasagricolas.com.br/cotacoes/soja/soja-bolsa-de-chicago-cme-group"
 URL_DOLAR = "https://www.noticiasagricolas.com.br/cotacao-do-dolar/"
+
+# Fonte oficial do dólar (Banco Central), usada como alternativa confiável
+# a partir de 2026-11, quando o noticiasagricolas.com.br passou a bloquear
+# (HTTP 403) os acessos vindos do GitHub Actions.
+BCB_SERIE_DOLAR = "10813"
+URL_BCB_DOLAR = (
+    f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{BCB_SERIE_DOLAR}"
+    f"/dados/ultimos/5?formato=json"
+)
 
 
 # ============================================================
@@ -144,21 +154,67 @@ def numero_br_para_float(valor):
         return None
 
 
-def baixar_texto_pagina(url):
+def baixar_texto_pagina(url, tentativas=3, espera_segundos=5):
+    """
+    Baixa uma página e devolve o texto visível.
+
+    Usa cabeçalhos parecidos com os de um navegador de verdade (o
+    noticiasagricolas.com.br passou a bloquear, com HTTP 403, requisições
+    com cara de robô) e tenta de novo algumas vezes antes de desistir,
+    já que bloqueios desse tipo às vezes são instáveis.
+    """
+
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/webp,*/*;q=0.8"
+        ),
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.noticiasagricolas.com.br/",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
     }
 
-    print(f"Acessando: {url}")
+    ultimo_erro = None
 
-    response = requests.get(url, headers=headers, timeout=30)
-    response.encoding = response.apparent_encoding
-    response.raise_for_status()
+    for tentativa in range(1, tentativas + 1):
+        print(f"Acessando: {url} (tentativa {tentativa}/{tentativas})")
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    texto = soup.get_text("\n", strip=True)
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            response.encoding = response.apparent_encoding
+            response.raise_for_status()
 
-    return texto
+            soup = BeautifulSoup(response.text, "html.parser")
+            return soup.get_text("\n", strip=True)
+
+        except requests.exceptions.HTTPError as erro:
+            ultimo_erro = erro
+            status = erro.response.status_code if erro.response is not None else None
+            print(f"Falhou (HTTP {status}) ao acessar {url}.")
+
+            if status == 403 and tentativa < tentativas:
+                print(f"Aguardando {espera_segundos}s antes de tentar de novo...")
+                time.sleep(espera_segundos)
+                continue
+
+            raise
+
+        except requests.exceptions.RequestException as erro:
+            ultimo_erro = erro
+            print(f"Erro de rede ao acessar {url}: {erro}")
+
+            if tentativa < tentativas:
+                time.sleep(espera_segundos)
+                continue
+
+            raise
+
+    raise ultimo_erro
 
 
 def data_hora_coleta():
@@ -170,19 +226,28 @@ def data_hora_coleta():
 # ============================================================
 
 def buscar_dolar():
-    texto = baixar_texto_pagina(URL_DOLAR)
+    """
+    Busca a cotação do dólar na API oficial do Banco Central (série 10813).
 
-    match = re.search(r"R\$\s*(\d+[,.]\d{2,4})", texto)
+    Antes isso vinha do noticiasagricolas.com.br, mas esse site passou a
+    bloquear (HTTP 403) os acessos do GitHub Actions. A API do BCB é
+    pública, estável e não tem esse bloqueio.
+    """
 
-    if not match:
-        print("Não consegui encontrar o dólar. Texto parcial da página:")
-        print(texto[:1500])
-        raise Exception("Dólar não encontrado.")
+    print(f"Acessando: {URL_BCB_DOLAR}")
 
-    dolar = numero_br_para_float(match.group(1))
-    dolar = round(dolar, 2)
+    response = requests.get(URL_BCB_DOLAR, timeout=30)
+    response.raise_for_status()
 
-    print(f"Dólar encontrado: {dolar:.2f}")
+    dados = response.json()
+
+    if not dados:
+        raise Exception("A API do BCB não retornou nenhuma cotação de dólar.")
+
+    ultimo = dados[-1]
+    dolar = round(float(str(ultimo["valor"]).replace(",", ".")), 2)
+
+    print(f"Dólar encontrado: {dolar:.2f} (referente a {ultimo['data']})")
 
     return dolar
 
@@ -784,16 +849,37 @@ def enviar_excel_para_sharepoint():
 # ============================================================
 
 def main():
-    dolar = buscar_dolar()
+    # Cada fonte é isolada em seu próprio try/except: se o
+    # noticiasagricolas.com.br (ou qualquer outra fonte) falhar, isso não
+    # derruba o restante da coleta - salvamos o que conseguimos buscar.
 
-    linhas_milho_b3 = buscar_cotacoes_milho_b3(dolar)
-    linhas_soja_chicago = buscar_cotacoes_soja_chicago(dolar)
+    try:
+        dolar = buscar_dolar()
+    except Exception as erro:
+        print(f"AVISO: falha ao buscar o dólar: {erro}")
+        dolar = None
+
+    linhas_milho_b3 = []
+    try:
+        linhas_milho_b3 = buscar_cotacoes_milho_b3(dolar)
+    except Exception as erro:
+        print(f"AVISO: falha ao buscar cotações de milho B3: {erro}")
+
+    linhas_soja_chicago = []
+    try:
+        linhas_soja_chicago = buscar_cotacoes_soja_chicago(dolar)
+    except Exception as erro:
+        print(f"AVISO: falha ao buscar cotações de soja Chicago: {erro}")
 
     linhas_cotacoes = linhas_milho_b3 + linhas_soja_chicago
 
     print(f"Total de linhas Notícias Agrícolas: {len(linhas_cotacoes)}")
 
-    linhas_sima = buscar_cotacoes_sima()
+    linhas_sima = []
+    try:
+        linhas_sima = buscar_cotacoes_sima()
+    except Exception as erro:
+        print(f"AVISO: falha ao buscar cotações SIMA/CELEPAR: {erro}")
 
     print(f"Total de linhas SIMA/CELEPAR: {len(linhas_sima)}")
 
